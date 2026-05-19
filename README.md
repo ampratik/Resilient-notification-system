@@ -263,12 +263,5 @@ This script sends sample payloads for all supported notification types and waits
 
 ### Manual testing
 
-Use curl or Postman to call the API endpoints above.
+Use curl or Postman to call the API provided in the collection.
 
-### Notes
-
-There are Jest scripts configured in `package.json`, but no `.spec.ts` test files currently exist in the repository.
-
-## Cleaned documentation
-
-This `README.md` now contains the full consolidated project documentation, including structure, flow, setup, testing, and dashboard usage.
