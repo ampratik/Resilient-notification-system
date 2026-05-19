@@ -5,15 +5,15 @@ import { NotificationLoggerService } from '../services/logger.service';
 import {
   BillingReminderHandler,
   BillingReminderPayload,
-} from './billing-reminder.handler';
+} from '../handlers/billing-reminder.handler';
 import {
   PaymentReceiptHandler,
   PaymentReceiptPayload,
-} from './payment-receipt.handler';
+} from '../handlers/payment-receipt.handler';
 import {
   SubscriptionAlertHandler,
   SubscriptionAlertPayload,
-} from './subscription-alert.handler';
+} from '../handlers/subscription-alert.handler';
 
 export type NotificationPayload =
   | BillingReminderPayload
@@ -69,31 +69,6 @@ export class NotificationDispatcher {
         const error = `Unknown notification type: ${type}`;
         this.logger.error(`[${notificationId}] ${error}`);
         throw new Error(error);
-    }
-  }
-
-  getHandlerDetails(type: NotificationType): {
-    name: string;
-    description: string;
-  } {
-    switch (type) {
-      case NotificationType.BILLING_REMINDER:
-        return {
-          name: 'Billing Reminder',
-          description: 'Invoice reminders for unpaid bills',
-        };
-      case NotificationType.PAYMENT_RECEIPT:
-        return {
-          name: 'Payment Receipt',
-          description: 'Confirmation when payment is received',
-        };
-      case NotificationType.SUBSCRIPTION_ALERT:
-        return {
-          name: 'Subscription Alert',
-          description: 'Subscription status changes and updates',
-        };
-      default:
-        return { name: 'Unknown', description: 'Unknown notification type' };
     }
   }
 }

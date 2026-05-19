@@ -1,5 +1,5 @@
-import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
-import { Job } from 'bullmq';
+import { Processor, WorkerHost, OnWorkerEvent, InjectQueue } from '@nestjs/bullmq';
+import { Job, Queue } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { NotificationDispatcher } from '../dispatchers/notification.dispatcher';
 import { RateLimiterService, RateLimitedException } from '../services/rate-limiter.service';
@@ -16,7 +16,7 @@ interface NotificationJobPayload {
   recipient: string;
   message?: string;
   scheduledAt: Date;
-  metadata: Record<string, any>; // Contains type-specific fields
+  metadata?: Record<string, any>; // Contains type-specific fields
 }
 
 @Processor('notifications')
@@ -25,6 +25,7 @@ export class NotificationProcessor extends WorkerHost {
 
   constructor(
     private dispatcher: NotificationDispatcher,
+    @InjectQueue('notifications-dlq') private deadLetterQueue: Queue,
     private rateLimiter: RateLimiterService,
     private timeWindow: TimeWindowService,
     private idempotency: IdempotencyService,
@@ -35,7 +36,7 @@ export class NotificationProcessor extends WorkerHost {
   }
 
   async process(job: Job<NotificationJobPayload>): Promise<void> {
-    const { notificationId, userId, type, recipient, metadata } = job.data;
+    const { notificationId, userId, type, recipient, metadata = {} } = job.data;
     const attemptNumber = job.attemptsMade + 1;
 
     this.notificationLogger.logEvent({
@@ -44,7 +45,6 @@ export class NotificationProcessor extends WorkerHost {
       userId,
       recipient,
       attemptCount: attemptNumber,
-      notificationType: type,
     });
 
     // Check for duplicate processing
@@ -52,7 +52,6 @@ export class NotificationProcessor extends WorkerHost {
       this.notificationLogger.logEvent({
         type: LogEventType.IDEMPOTENCY_DUPLICATE,
         notificationId,
-        notificationType: type,
       });
       return;
     }
@@ -66,7 +65,6 @@ export class NotificationProcessor extends WorkerHost {
       this.notificationLogger.logEvent({
         type: LogEventType.TIME_WINDOW_DEFERRED,
         notificationId,
-        notificationType: type,
       });
 
       // Update status to DEFERRED
@@ -95,7 +93,6 @@ export class NotificationProcessor extends WorkerHost {
         type: LogEventType.JOB_PROCESSING,
         notificationId,
         attemptCount: attemptNumber,
-        notificationType: type,
       });
 
       // Check rate limit
@@ -107,11 +104,7 @@ export class NotificationProcessor extends WorkerHost {
             type: LogEventType.RATE_LIMIT_HIT,
             notificationId,
             attemptCount: attemptNumber,
-            notificationType: type,
           });
-
-          // Retry with exponential backoff
-          throw error;
         }
         throw error;
       }
@@ -122,7 +115,7 @@ export class NotificationProcessor extends WorkerHost {
         userId,
         recipient,
         ...metadata, // Spread type-specific fields
-      };
+      } as any;
 
       await this.dispatcher.dispatch(type, payload);
 
@@ -136,7 +129,6 @@ export class NotificationProcessor extends WorkerHost {
         type: LogEventType.JOB_SUCCESS,
         notificationId,
         attemptCount: attemptNumber,
-        notificationType: type,
       });
     } catch (error) {
       // Increment attempt count
@@ -149,7 +141,6 @@ export class NotificationProcessor extends WorkerHost {
           notificationId,
           attemptCount: attemptNumber,
           message: error.message,
-          notificationType: type,
         });
 
         // Re-throw to trigger BullMQ retry
@@ -163,12 +154,25 @@ export class NotificationProcessor extends WorkerHost {
         error.message || 'Unknown error',
       );
 
+      await this.deadLetterQueue.add(
+        'dead-letter',
+        {
+          ...job.data,
+          failureReason: error.message || 'Unknown error',
+          failedAt: new Date().toISOString(),
+          attemptCount: attemptNumber,
+        },
+        {
+          jobId: `${notificationId}-dlq`,
+          removeOnComplete: true,
+        },
+      );
+
       this.notificationLogger.logEvent({
         type: LogEventType.JOB_FAILED,
         notificationId,
         attemptCount: attemptNumber,
         error: error.message,
-        notificationType: type,
       });
 
       throw error; // Still throw to track in BullMQ failed jobs

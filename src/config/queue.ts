@@ -29,7 +29,7 @@ export const getNotificationQueueConfig = (
         delay: configService.get<number>('notification.baseDelayMs') || 2000,
       },
       removeOnComplete: true,
-      removeOnFail: false,
+      removeOnFail: true,
     },
   };
 };

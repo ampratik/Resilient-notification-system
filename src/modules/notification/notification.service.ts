@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import { v4 as uuidv4 } from 'uuid';
@@ -13,6 +13,7 @@ export class NotificationService {
 
   constructor(
     @InjectQueue('notifications') private notificationQueue: Queue,
+    @InjectQueue('notifications-dlq') private deadLetterQueue: Queue,
     private notificationRepository: NotificationRepository,
   ) {}
 
@@ -45,6 +46,7 @@ export class NotificationService {
         recipient: createNotificationDto.recipient,
         message: createNotificationDto.message,
         scheduledAt: createNotificationDto.scheduledAt,
+        metadata: createNotificationDto.metadata ?? {},
       },
       {
         delay,
@@ -93,10 +95,91 @@ export class NotificationService {
   }
 
   async getFailedNotifications(limit: number = 100): Promise<NotificationResponseDto[]> {
-    const notifications = await this.notificationRepository.findFailedNotifications(
-      limit,
+    const jobs = await this.deadLetterQueue.getJobs(
+      ['waiting', 'delayed', 'failed'],
+      0,
+      limit - 1,
+      false,
     );
-    return notifications.map((n) => this.mapToResponseDto(n));
+
+    return jobs.map((job) => {
+      const payload = job.data as any;
+      return {
+        notificationId: payload.notificationId,
+        userId: payload.userId,
+        type: payload.type,
+        recipient: payload.recipient,
+        message: payload.message,
+        scheduledAt: payload.scheduledAt,
+        status: NotificationStatus.FAILED,
+        failureReason: payload.failureReason,
+        attemptCount: payload.attemptCount ?? 0,
+        lastAttemptAt: payload.failedAt ? new Date(payload.failedAt) : undefined,
+        createdAt: new Date(job.timestamp),
+        updatedAt: job.finishedOn ? new Date(job.finishedOn) : new Date(job.timestamp),
+      };
+    });
+  }
+
+  async retryFailedNotification(
+    notificationId: string,
+  ): Promise<NotificationResponseDto> {
+    const dlqJobId = `${notificationId}-dlq`;
+    const job = await this.deadLetterQueue.getJob(dlqJobId);
+
+    if (!job) {
+      throw new NotFoundException(
+        `Dead letter job not found for notification ${notificationId}`,
+      );
+    }
+
+    const payload = job.data as any;
+    if (!payload || !payload.notificationId) {
+      throw new NotFoundException(
+        `Invalid dead letter payload for notification ${notificationId}`,
+      );
+    }
+
+    const retryPayload = {
+      notificationId: payload.notificationId,
+      userId: payload.userId,
+      type: payload.type,
+      recipient: payload.recipient,
+      message: payload.message,
+      scheduledAt: payload.scheduledAt,
+      metadata: payload.metadata ?? {},
+    };
+
+    await this.notificationRepository
+      .createQueryBuilder()
+      .update(Notification)
+      .set({
+        status: NotificationStatus.QUEUED,
+        failureReason: null as any,
+        attemptCount: 0,
+        lastAttemptAt: null as any,
+        updatedAt: new Date(),
+      })
+      .where('notificationId = :notificationId', { notificationId })
+      .execute();
+
+    await this.notificationQueue.add('send-notification', retryPayload, {
+      jobId: notificationId,
+    });
+
+    await job.remove();
+
+    const notification = await this.notificationRepository.findByNotificationId(
+      notificationId,
+    );
+
+    if (!notification) {
+      throw new NotFoundException(
+        `Notification record not found for ${notificationId}`,
+      );
+    }
+
+    return this.mapToResponseDto(notification);
   }
 
   private calculateDelay(scheduledAt: Date): number {

@@ -62,4 +62,11 @@ export class NotificationController {
     const data = await this.notificationService.getFailedNotifications(parsedLimit);
     return { data };
   }
+
+  @Post('failed/:id/retry')
+  async retryFailedNotification(
+    @Param('id') notificationId: string,
+  ): Promise<NotificationResponseDto> {
+    return this.notificationService.retryFailedNotification(notificationId);
+  }
 }
