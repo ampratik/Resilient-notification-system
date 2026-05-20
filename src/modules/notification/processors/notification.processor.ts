@@ -130,7 +130,12 @@ export class NotificationProcessor extends WorkerHost {
         notificationId,
         attemptCount: attemptNumber,
       });
+      this.logger.log(
+        `Notification ${notificationId} completed successfully on attempt ${attemptNumber}`,
+      );
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
       // Increment attempt count
       await this.notificationRepository.incrementAttemptCount(notificationId);
 
@@ -140,8 +145,11 @@ export class NotificationProcessor extends WorkerHost {
           type: LogEventType.JOB_RETRY,
           notificationId,
           attemptCount: attemptNumber,
-          message: error.message,
+          message: errorMessage,
         });
+        this.logger.warn(
+          `Notification ${notificationId} failed on attempt ${attemptNumber}, retrying ${retriesLeft} more time(s): ${errorMessage}`,
+        );
 
         // Re-throw to trigger BullMQ retry
         throw error;
@@ -151,28 +159,36 @@ export class NotificationProcessor extends WorkerHost {
       await this.notificationRepository.updateStatus(
         notificationId,
         NotificationStatus.FAILED,
-        error.message || 'Unknown error',
+        errorMessage || 'Unknown error',
       );
+
+      const dlqPayload = {
+        ...job.data,
+        failureReason: errorMessage || 'Unknown error',
+        failedAt: new Date().toISOString(),
+        attemptCount: attemptNumber,
+      };
 
       await this.deadLetterQueue.add(
         'dead-letter',
-        {
-          ...job.data,
-          failureReason: error.message || 'Unknown error',
-          failedAt: new Date().toISOString(),
-          attemptCount: attemptNumber,
-        },
+        dlqPayload,
         {
           jobId: `${notificationId}-dlq`,
           removeOnComplete: true,
         },
       );
+      this.logger.warn(
+        `Notification ${notificationId} moved to DLQ after ${attemptNumber} failed attempt(s): ${errorMessage}`,
+      );
+      const payloadLog = `DLQ payload: ${JSON.stringify(dlqPayload, null, 2)}`;
+      this.logger.warn(payloadLog);
+      console.warn(payloadLog);
 
       this.notificationLogger.logEvent({
         type: LogEventType.JOB_FAILED,
         notificationId,
         attemptCount: attemptNumber,
-        error: error.message,
+        error: errorMessage,
       });
 
       throw error; // Still throw to track in BullMQ failed jobs
@@ -182,24 +198,24 @@ export class NotificationProcessor extends WorkerHost {
   @OnWorkerEvent('active')
   onActive(job: Job): void {
     const payload = job.data as NotificationJobPayload;
-    this.logger.debug(
-      `Job ${job.id} started processing (type: ${payload.type})`,
-    );
+    const msg = `Job ${job.id} started processing (type: ${payload.type})`;
+    this.logger.debug(msg);
+    console.debug(msg);
   }
 
   @OnWorkerEvent('completed')
   onCompleted(job: Job): void {
     const payload = job.data as NotificationJobPayload;
-    this.logger.log(
-      `Job ${job.id} completed successfully (type: ${payload.type})`,
-    );
+    const msg = `Job ${job.id} completed successfully (type: ${payload.type})`;
+    this.logger.log(msg);
+    console.log(msg);
   }
 
   @OnWorkerEvent('failed')
   onFailed(job: Job, err: Error): void {
     const payload = job.data as NotificationJobPayload;
-    this.logger.error(
-      `Job ${job.id} failed: ${err.message} (type: ${payload.type})`,
-    );
+    const msg = `Job ${job.id} failed: ${err.message} (type: ${payload.type})`;
+    this.logger.error(msg);
+    console.error(msg);
   }
 }

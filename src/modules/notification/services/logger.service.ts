@@ -39,16 +39,20 @@ export class NotificationLoggerService {
     switch (event.type) {
       case LogEventType.JOB_SUCCESS:
         this.logger.log(logMessage);
+        console.log(logMessage);
         break;
       case LogEventType.JOB_FAILED:
       case LogEventType.RATE_LIMIT_HIT:
         this.logger.warn(logMessage);
+        console.warn(logMessage);
         break;
       case LogEventType.JOB_RETRY:
         this.logger.debug(logMessage);
+        console.debug(logMessage);
         break;
       default:
         this.logger.log(logMessage);
+        console.log(logMessage);
     }
   }
 

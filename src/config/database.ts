@@ -13,5 +13,5 @@ export const getDatabaseConfig = (
   database: configService.get('database.database'),
   entities: [Notification],
   synchronize: true, // Use migrations in production
-  logging: configService.get('nodeEnv') === 'development',
+  logging: ['error', 'warn'],
 });
